@@ -1,4 +1,4 @@
--- SWAG_HUB V1 | Instant TP
+-- SWAG_HUB V2 | Instant TP
 -- Pick a pet (icon + value), press Steal: taken and delivered with the Instant TP logic only.
 
 local Players = game:GetService("Players")
@@ -391,7 +391,7 @@ end
 local function describe(record)
 	local directory = type(Assets) == "table" and Assets.Directory or nil
 	local entry = type(directory) == "table" and directory[tostring(record.AssetCategory)] or nil
-	local info = { Uid = record.Uid, Category = tostring(record.AssetCategory), Name = tostring(record.AssetCategory), Icon = "", Rarity = 0, Value = 0 }
+	local info = { Uid = record.Uid, Category = tostring(record.AssetCategory), Name = tostring(record.AssetCategory), Icon = "", Rarity = 0, RarityName = nil, Value = 0 }
 
 	if type(entry) == "table" then
 		info.Name = tostring(entry.DisplayName or record.AssetCategory)
@@ -401,7 +401,12 @@ local function describe(record)
 			info.Icon = tonumber(icon) and ("rbxassetid://" .. icon) or icon
 		end
 		if type(entry.Rarity) == "table" then
-			info.Rarity = tonumber(entry.Rarity.RarityNumber or entry.Rarity.Rank) or 0
+			local rarityData = entry.Rarity
+			info.Rarity = tonumber(rarityData.RarityNumber or rarityData.Rank or rarityData.Value) or 0
+			local named = rarityData.Name or rarityData.RarityName or rarityData.DisplayName or rarityData.Label
+			if type(named) == "string" and named ~= "" then info.RarityName = named:gsub("^%s+", ""):gsub("%s+$", "") end
+		elseif type(entry.Rarity) == "string" then
+			info.RarityName = entry.Rarity
 		end
 
 		local scale = tonumber(record.AssetScale) or 1
@@ -1310,12 +1315,12 @@ end
 -- Remove every stale copy, not just the first matching ScreenGui.
 local guiParent = parentGui()
 for _, child in ipairs(guiParent:GetChildren()) do
-	if child.Name == "SWAG_HUB V1" and child:IsA("ScreenGui") then
+	if child.Name == "SWAG_HUB V2" and child:IsA("ScreenGui") then
 		pcall(function() child:Destroy() end)
 	end
 end
 
-local gui = make("ScreenGui", { Name = "SWAG_HUB V1", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
+local gui = make("ScreenGui", { Name = "SWAG_HUB V2", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
 gui.Parent = parentGui()
 
 local W, H, HEADER = 320, 360, 40
@@ -1465,7 +1470,7 @@ do
 end
 text(header, {
 	Size = UDim2.new(1, -92, 1, 0), Position = UDim2.fromOffset(12, 0), Font = Enum.Font.GothamBlack, TextSize = 15,
-	TextColor3 = Color3.fromRGB(5, 12, 16), TextXAlignment = Enum.TextXAlignment.Left, Text = "SWAG_HUB V1", Living = false,
+	TextColor3 = Color3.fromRGB(5, 12, 16), TextXAlignment = Enum.TextXAlignment.Left, Text = "SWAG_HUB V2", Living = false,
 })
 
 local function headerButton(label, offset)
@@ -1487,8 +1492,104 @@ local subtitle = text(body, {
 	TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = Color3.fromRGB(165, 190, 200), Text = "EGG FINDER  •  AUTO REFRESH", Living = false,
 })
 
+-- UI order is highest-to-lowest. Numeric fallback uses conventional zero-based rank order.
+local rarityNames = {"Divine", "Eternal", "Secret", "Cosmic", "Mythic", "Legendary", "Epic", "Rare", "Uncommon", "Common"}
+local rarityByNumericRank = {"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Cosmic", "Secret", "Eternal", "Divine"}
+local function rarityNameFor(info)
+	local name = type(info) == "table" and info.RarityName or nil
+	if type(name) == "string" then
+		name = name:match("([%a]+)")
+		for _, known in ipairs(rarityNames) do if name and string.lower(name) == string.lower(known) then return known end end
+	end
+	local rank = tonumber(type(info) == "table" and info.Rarity) or 0
+	return rarityByNumericRank[rank + 1]
+end
+-- Multi-select filter. All rarities are enabled by default.
+local selectedRarities = {}
+for _, rarityName in ipairs(rarityNames) do selectedRarities[rarityName] = true end
+local rarityButton = make("TextButton", {
+	Size = UDim2.new(1, 0, 0, 28), Position = UDim2.fromOffset(0, 23),
+	BackgroundColor3 = BG, Font = Enum.Font.GothamBold, TextSize = 12,
+	TextColor3 = WHITE, Text = "RARITY: All Rarities  ▾", AutoButtonColor = true,
+	ZIndex = 10,
+})
+rarityButton.Parent = body
+corner(rarityButton, 10)
+livingStroke(rarityButton, 1, true)
+livingText(rarityButton)
+
+local rarityMenu = make("ScrollingFrame", {
+	Name = "RarityOptions", Visible = false,
+	Size = UDim2.new(1, 0, 0, 190), Position = UDim2.fromOffset(0, 53),
+	BackgroundColor3 = Color3.fromRGB(10, 15, 24), BorderSizePixel = 0,
+	ScrollBarThickness = 4, ScrollBarImageColor3 = WHITE,
+	CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	ZIndex = 30,
+})
+rarityMenu.Parent = body
+corner(rarityMenu, 10)
+livingStroke(rarityMenu, 1, true)
+make("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}).Parent = rarityMenu
+make("UIPadding", {PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5), PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5)}).Parent = rarityMenu
+
+local function updateRarityButton()
+	local count = 0
+	for _, rarityName in ipairs(rarityNames) do
+		if selectedRarities[rarityName] then count += 1 end
+	end
+	local label = count == #rarityNames and "All Rarities" or (count == 0 and "None" or (count == 1 and "1 selected" or (tostring(count) .. " selected")))
+	rarityButton.Text = "RARITY: " .. label .. "  ▾"
+end
+
+local function allRaritiesSelected()
+	for _, rarityName in ipairs(rarityNames) do
+		if not selectedRarities[rarityName] then return false end
+	end
+	return true
+end
+
+local function rebuildRarityMenu()
+	for _, child in ipairs(rarityMenu:GetChildren()) do
+		if child:IsA("TextButton") then child:Destroy() end
+	end
+	local allButton = make("TextButton", {
+		Size = UDim2.new(1, -2, 0, 27), BackgroundColor3 = Color3.fromRGB(25, 42, 54),
+		BorderSizePixel = 0, Font = Enum.Font.GothamBold, TextSize = 12,
+		TextColor3 = WHITE, Text = (allRaritiesSelected() and "✓  " or "□  ") .. "All Rarities", TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = 0, ZIndex = 31,
+	})
+	allButton.Parent = rarityMenu
+	corner(allButton, 6)
+	allButton.Activated:Connect(function()
+		-- Toggle All Rarities both ways: checked -> none, unchecked -> all.
+		local turnAllOn = not allRaritiesSelected()
+		for _, rarityName in ipairs(rarityNames) do
+			selectedRarities[rarityName] = turnAllOn
+		end
+		rebuildRarityMenu()
+		updateRarityButton()
+		requestRefresh()
+	end)
+	for index, rarityName in ipairs(rarityNames) do
+		local option = make("TextButton", {
+			Size = UDim2.new(1, -2, 0, 27), BackgroundColor3 = Color3.fromRGB(17, 25, 36),
+			BorderSizePixel = 0, Font = Enum.Font.GothamMedium, TextSize = 12,
+			TextColor3 = WHITE, Text = (selectedRarities[rarityName] and "✓  " or "□  ") .. rarityName,
+			TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = index, ZIndex = 31,
+		})
+		option.Parent = rarityMenu
+		corner(option, 6)
+		option.Activated:Connect(function()
+			selectedRarities[rarityName] = not selectedRarities[rarityName]
+			rebuildRarityMenu()
+			updateRarityButton()
+			requestRefresh()
+		end)
+	end
+end
+
 local list = make("ScrollingFrame", {
-	Size = UDim2.new(1, 0, 1, -128), Position = UDim2.fromOffset(0, 24), BackgroundColor3 = Color3.fromRGB(11, 18, 26), BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = WHITE,
+	Size = UDim2.new(1, 0, 1, -205), Position = UDim2.fromOffset(0, 56), BackgroundColor3 = Color3.fromRGB(11, 18, 26), BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = WHITE,
 	CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
 })
 list.Parent = body
@@ -1526,11 +1627,14 @@ end
 -- Auto Farm toggle; the existing STEAL button is reused.
 local autoFarmEnabled = false
 local autoFarmButton = bigButton("AUTO FARM: OFF", UDim2.new(0, 0, 1, -80), UDim2.new(1, 0, 0, 36))
+local eggEspEnabled = false
+local eggEspButton = bigButton("EGG ESP: OFF", UDim2.new(0, 0, 1, -120), UDim2.new(1, 0, 0, 32))
 local refreshButton = bigButton("↻  REFRESH", UDim2.new(0, 0, 1, -38), UDim2.new(0.43, -4, 0, 38))
 local stealButton = bigButton("STEAL EGG  →", UDim2.new(0.43, 4, 1, -38), UDim2.new(0.57, -4, 0, 38))
 
 local selectedUid = nil
 local rows = {}
+local eggEspLabels = {}
 local refreshing = false
 local refreshQueued = false
 local closed = false
@@ -1554,6 +1658,11 @@ local function setSelected(uid)
 		row.Gradient.Color = on and bands(WHITE, SILVER) or bands(Color3.fromRGB(50, 70, 78), Color3.fromRGB(30, 38, 48))
 	end
 end
+
+trackConnection(rarityButton.Activated:Connect(function()
+	rarityMenu.Visible = not rarityMenu.Visible
+	if rarityMenu.Visible then rebuildRarityMenu() end
+end))
 
 local function rebuild()
 	if refreshing or closed or not gui.Parent then
@@ -1584,7 +1693,11 @@ local function rebuild()
 		local uid = tostring(record.Uid or "")
 		if uid ~= "" and not seenUids[uid] then
 			seenUids[uid] = true
-			infos[#infos + 1] = describe(record)
+			local info = describe(record)
+			local rarityName = rarityNameFor(info)
+			if rarityName and selectedRarities[rarityName] then
+				infos[#infos + 1] = info
+			end
 		end
 	end
 	table.sort(infos, function(a, b)
@@ -1627,9 +1740,12 @@ local function rebuild()
 	end
 
 	setSelected(still and selectedUid or nil)
+	if not still then
+		selectedUid = nil
+	end
 	if #infos == 0 then
 		selectedUid = nil
-		status("Pick a pet")
+		status("No eggs match this rarity")
 	end
 	refreshing = false
 end
@@ -1659,8 +1775,91 @@ local function buttonMotion(button)
     button.MouseLeave:Connect(function() tween(button, 0.14, {BackgroundColor3 = BG}, Enum.EasingStyle.Quad) end)
 end
 buttonMotion(autoFarmButton)
+buttonMotion(eggEspButton)
 buttonMotion(refreshButton)
 buttonMotion(stealButton)
+
+-- Local-only Egg ESP: labels show the item name/rarity already exposed by the field-egg snapshot.
+-- It cannot reveal undisclosed server-only hatch odds or hidden contents that the client does not receive.
+local function clearEggEsp()
+    for uid, billboard in pairs(eggEspLabels) do
+        if billboard then pcall(function() billboard:Destroy() end) end
+        eggEspLabels[uid] = nil
+    end
+end
+
+local function findEggAdornee(uid)
+    local node = workspace:FindFirstChild(uid)
+    local slots = workspace:FindFirstChild("AreaEggSlotsClient")
+    node = node or (slots and slots:FindFirstChild(uid))
+    if not node then return nil end
+    if node:IsA("BasePart") then return node end
+    return node:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function refreshEggEsp()
+    if not eggEspEnabled or closed then
+        clearEggEsp()
+        return
+    end
+    local seen = {}
+    for _, record in ipairs(snapshot()) do
+        local uid = tostring(record.Uid or "")
+        if uid ~= "" and (record.State == "Slot" or record.State == "Dropped") then
+            local adornee = findEggAdornee(uid)
+            if adornee then
+                seen[uid] = true
+                local info = describe(record)
+                local label = eggEspLabels[uid]
+                if not label or not label.Parent then
+                    label = make("BillboardGui", {
+                        Name = "SWAG_HUB_EggESP", Size = UDim2.fromOffset(190, 46),
+                        StudsOffset = Vector3.new(0, 3.5, 0), AlwaysOnTop = true,
+                        MaxDistance = 300, Adornee = adornee,
+                    })
+                    label.Parent = gui
+                    local textLabel = make("TextLabel", {
+                        Name = "Info", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(8, 12, 20),
+                        BackgroundTransparency = 0.18, BorderSizePixel = 0, TextColor3 = RARITY_COLORS[math.clamp(info.Rarity, 1, #RARITY_COLORS)] or WHITE,
+                        TextStrokeTransparency = 0.65, Font = Enum.Font.GothamBold, TextSize = 12,
+                        TextWrapped = true, Text = "", Parent = label,
+                    })
+                    corner(textLabel, 8)
+                    make("UIStroke", {Thickness = 1, Color = Color3.fromRGB(80, 230, 190), Transparency = 0.15}).Parent = textLabel
+                    eggEspLabels[uid] = label
+                end
+                label.Adornee = adornee
+                local textLabel = label:FindFirstChild("Info")
+                if textLabel then
+                    textLabel.Text = info.Name .. "\n" .. (rarityNameFor(info) or "Unknown") .. " • " .. money(info.Value)
+                    textLabel.TextColor3 = RARITY_COLORS[math.clamp(info.Rarity, 1, #RARITY_COLORS)] or WHITE
+                end
+            end
+        end
+    end
+    for uid, billboard in pairs(eggEspLabels) do
+        if not seen[uid] then
+            if billboard then pcall(function() billboard:Destroy() end) end
+            eggEspLabels[uid] = nil
+        end
+    end
+end
+
+trackConnection(eggEspButton.Activated:Connect(function()
+    eggEspEnabled = not eggEspEnabled
+    eggEspButton.Text = eggEspEnabled and "EGG ESP: ON" or "EGG ESP: OFF"
+    eggEspButton.BackgroundColor3 = eggEspEnabled and Color3.fromRGB(20, 105, 75) or BG
+    if not eggEspEnabled then clearEggEsp() else refreshEggEsp() end
+end))
+
+task.spawn(function()
+    while gui.Parent and not closed do
+        if eggEspEnabled then pcall(refreshEggEsp) end
+        task.wait(1)
+    end
+    clearEggEsp()
+end)
+
 trackConnection(refreshButton.MouseButton1Click:Connect(requestRefresh))
 
 trackConnection(autoFarmButton.Activated:Connect(function()
@@ -1685,11 +1884,21 @@ trackConnection(stealButton.MouseButton1Click:Connect(function()
 			local completed = 0
 			local failed = 0
 			while gui.Parent and autoFarmEnabled and not state.Cancel do
+				-- Auto Farm is strictly limited to UIDs currently rendered in the pet-selection box.
+				-- This keeps hidden pets and pets excluded by the rarity filter from being collected.
+				local visibleUids = {}
+				for uid, row in pairs(rows) do
+					if row.Frame and row.Frame.Parent == list and row.Frame.Visible then
+						visibleUids[tostring(uid)] = true
+					end
+				end
+
 				local nextUid = nil
-				for _, record in ipairs(snapshot()) do
-					local uid = type(record) == "table" and tostring(record.Uid or "") or ""
-					if uid ~= "" and not attempted[uid] then
-						nextUid = uid
+				-- Choose only from the currently rendered, rarity-filtered selection rows.
+				for uid, row in pairs(rows) do
+					local key = tostring(uid)
+					if visibleUids[key] and not attempted[key] and eggPosition(key) then
+						nextUid = key
 						break
 					end
 				end
@@ -1856,6 +2065,8 @@ end))
 local function cleanup()
 	if closed then return end
 	closed = true
+	eggEspEnabled = false
+	clearEggEsp()
 	state.Cancel = true
 	fpsOff()
 	shieldStop()
@@ -1894,7 +2105,7 @@ end)
 shieldStart()
 
 
------------------------------------------------------------------- SWAG_HUB V1 key gate
+------------------------------------------------------------------ SWAG_HUB V2 key gate
 -- Client-side key checks are a convenience gate, not secure authentication.
 local REQUIRED_KEY = "swas_swas_swagg"
 window.Visible = false
@@ -1915,7 +2126,7 @@ corner(keyCard, 18)
 livingStroke(keyCard, 2, true)
 local keyTitle = make("TextLabel", {
     Size = UDim2.new(1, -24, 0, 42), Position = UDim2.fromOffset(12, 12),
-    BackgroundTransparency = 1, Text = "SWAG_HUB V1  •  KEY SYSTEM", TextColor3 = Color3.new(1,1,1),
+    BackgroundTransparency = 1, Text = "SWAG_HUB V2  •  KEY SYSTEM", TextColor3 = Color3.new(1,1,1),
     Font = Enum.Font.GothamBlack, TextSize = 17, ZIndex = 102,
 })
 keyTitle.Parent = keyCard
